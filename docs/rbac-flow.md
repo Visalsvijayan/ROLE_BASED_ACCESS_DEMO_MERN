@@ -1,152 +1,20 @@
-# RBAC Flow (Role-Based Access Control)
+# Role-based access flow
 
-This project has two roles: **`user`** and **`admin`**. RBAC is enforced in **two places**:
+Roles: `user`, `admin` (`backend/src/constants/roles.js`). The role is stored on the user in the database and is never taken from a request body.
 
-1. **Frontend** — `ProtectedRoute.jsx` and `AdminRoute.jsx`. These are *navigation* guards.
-2. **Backend** — `authMiddleware.js` (`protect`) and `roleMiddleware.js` (`authorize(...)`). These are the **real security boundary**.
+**Backend (the real security)**
+- `protect` -> 401 if there is no valid token or the account is inactive.
+- `authorize(ROLES.ADMIN)` -> 403 if the role is not allowed.
+- `/api/users`, `/api/admin/*`, product create/update/delete and `/api/products/admin/*` are admin only.
 
-Frontend guards are for UX. If you bypass them (e.g. by typing `/admin` in the URL bar), the backend will still reject your request with `403 Forbidden` if you are not an admin.
+**Frontend (user experience only)** - `features/auth/routeGuards.jsx`
+- `GuestRoute`: login/register; logged-in users are redirected home (admins to `/admin`).
+- `ProtectedRoute`: needs login, otherwise `/login` and back afterwards.
+- `RoleRoute allowedRoles={[ADMIN]}`: guards all of `/admin/*` once; a user gets `/unauthorized`.
+- The product catalog (home, products, product details) is public. To require login, wrap those routes in `ProtectedRoute` in `routes/AppRoutes.jsx` (the API would also need `protect` on `GET /products`).
 
----
-
-## Flow A: Not logged in
-
-```
-Visit /admin
-   ↓
-<AdminRoute> sees isAuthenticated = false
-   ↓
-Redirect to /login
-```
-
-If the user instead calls the admin API directly with no token:
-
-```
-GET /api/users
-   ↓
-protect middleware: no Authorization header
-   ↓
-401 Unauthorized  { message: "Not authenticated" }
-```
-
----
-
-## Flow B: Logged in as user
-
-```
-Visit /admin
-   ↓
-<AdminRoute> sees isAuthenticated = true
-   ↓
-user.role === "user", not "admin"
-   ↓
-Redirect to /unauthorized
-```
-
-If the user calls the admin API directly with a **valid** access token:
-
-```
-GET /api/users
-Authorization: Bearer <valid access token, role=user>
-   ↓
-protect middleware: token valid, user loaded
-   ↓
-authorize("admin"): req.user.role !== "admin"
-   ↓
-403 Forbidden  { message: "Access denied" }
-```
-
-> This is the key demo: a **valid** token is still not enough. RBAC requires
-> the *role* to match. Same token, different endpoint, different answer.
-
----
-
-## Flow C: Logged in as admin
-
-```
-Visit /admin
-   ↓
-<AdminRoute>: authenticated AND role === "admin"
-   ↓
-Render the dashboard
-```
-
-```
-GET /api/users
-Authorization: Bearer <valid access token, role=admin>
-   ↓
-protect: ok
-   ↓
-authorize("admin"): ok
-   ↓
-200 OK with users list
-```
-
----
-
-## Where RBAC lives in the code
-
-### Backend
-
-```js
-// backend/routes/userRoutes.js
-import { protect } from "../middleware/authMiddleware.js";
-import { authorize } from "../middleware/roleMiddleware.js";
-
-router.use(protect, authorize("admin"));
-
-router.get("/", getUsers);
-router.get("/:id", getUserById);
-router.patch("/:id/status", updateUserStatus);
-router.delete("/:id", deleteUser);
-```
-
-```js
-// backend/middleware/roleMiddleware.js
-export const authorize = (...allowedRoles) => (req, res, next) => {
-  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-  if (!allowedRoles.includes(req.user.role)) {
-    return res.status(403).json({ message: "Access denied" });
-  }
-  next();
-};
-```
-
-### Frontend
-
-```jsx
-// frontend/src/components/AdminRoute.jsx
-<Route
-  path="/admin"
-  element={
-    <AdminRoute>
-      <Dashboard />
-    </AdminRoute>
-  }
-/>
-```
-
-```jsx
-// frontend/src/components/Navbar.jsx
-{isAuthenticated && user?.role === "admin" && (
-  <>
-    <Link to="/admin">Dashboard</Link>
-    <Link to="/admin/users">Users</Link>
-    <Link to="/admin/products">Products</Link>
-  </>
-)}
-```
-
-The navbar hides admin links for non-admins, but even if a user typed the URL
-in, the AdminRoute would redirect them and the backend would still return 403.
-
----
-
-## Status code cheat sheet
-
-| Scenario | Code |
-|---|---|
-| No token / invalid token | **401** |
-| Valid token, wrong role | **403** |
-| Valid token, inactive user | **401** (treated as unauthenticated) |
-| Valid admin token, all good | **200** |
+| Page | Guest | User | Admin |
+|---|---|---|---|
+| Catalog | yes | yes | yes |
+| Profile | no | yes | yes |
+| `/admin/*` | no | no | yes |
